@@ -1,0 +1,371 @@
+---
+output: html_document
+---
+# Data Preparation and Association Rule Mining
+
+#### Reading Employee Attrition Data
+
+```{r data, message=F, warning=F}
+library(tidyverse)
+emp_atr <- read_csv("employee_attrition.csv", col_types = cols())
+attr(emp_atr, 'spec') <- NULL
+dim(emp_atr)
+```
+
+```{r structure}
+str(emp_atr)
+```
+
+#### Preview of Data
+
+```{r preview, message = F, warning = F}
+library(knitr)
+knitr::kable(head(emp_atr))
+```
+
+Removing those attributes that are not useful for the analysis
+
+```{r rmatr}
+emp_atr <- select(emp_atr, -c("EmployeeCount", "EmployeeNumber", "Over18", "StandardHours"))
+```
+
+#### Changing Attribute Type
+
+Converting character type to factor
+
+```{r factors}
+char_var <- sapply(emp_atr, is.character)
+emp_atr[,char_var] <- lapply(emp_atr[,char_var], as.factor)
+```
+
+### Data Quality Issues
+
+#### 1. Data outliers
+
+Looking for outliers by plotting a boxplot
+
+```{r outlier1}
+boxplot(emp_atr$TotalWorkingYears)
+```
+
+```{r outlier2}
+boxplot(emp_atr$YearsWithCurrManager)
+```
+
+Omitting the extreme outliers in total working years and years with current manager as the values are much higher than corresponding employee age
+
+```{r rmoutlier}
+outlier_obs <- c(which(emp_atr$TotalWorkingYears == 114), which(emp_atr$YearsWithCurrManager == 219))
+emp_atr <- emp_atr[-outlier_obs, ]
+```
+
+#### 2. Missing values
+
+Checking for number missing values
+
+```{r nas}
+sum(is.na(emp_atr))
+```
+
+Looking for attributes with missing valies
+
+```{r naatr}
+which(apply(emp_atr, 2, function(x) sum(is.na(x))) > 0)
+```
+
+Replacing missing value with mean of the attribute
+
+```{r nareplace}
+emp_atr$DistanceFromHome[is.na(emp_atr$DistanceFromHome)] <- mean(emp_atr$DistanceFromHome, na.rm = T)
+emp_atr$JobLevel[is.na(emp_atr$JobLevel)] <- mean(emp_atr$JobLevel, na.rm = T)
+emp_atr$PercentSalaryHike[is.na(emp_atr$PercentSalaryHike)] <- mean(emp_atr$PercentSalaryHike, na.rm = T)
+emp_atr$PerformanceRating[is.na(emp_atr$PerformanceRating)] <- mean(emp_atr$PerformanceRating, na.rm = T)
+emp_atr$RelationshipSatisfaction[is.na(emp_atr$RelationshipSatisfaction)] <- mean(emp_atr$RelationshipSatisfaction, na.rm = T)
+emp_atr$TotalWorkingYears[is.na(emp_atr$TotalWorkingYears)] <- mean(emp_atr$TotalWorkingYears, na.rm = T)
+emp_atr$YearsSinceLastPromotion[is.na(emp_atr$YearsSinceLastPromotion)] <- mean(emp_atr$YearsSinceLastPromotion, na.rm = T)
+```
+
+Since both Gender and OverTime are of type factor, it is better to omit the observations with missing values for further analysis
+
+```{r naomit}
+emp_atr <- emp_atr[-c(which(is.na(emp_atr$Gender)), which(is.na(emp_atr$OverTime))),]
+ea <- emp_atr
+```
+
+#### 3. Duplicate records
+
+Counting number of duplicate records  in the data
+
+```{r duplicate}
+nrow(emp_atr[duplicated(emp_atr), ])
+```
+
+### Exploratory Data Analysis
+
+Comparing employee rate and income based on different education field
+
+```{r eda1}
+library(dplyr)
+kable(emp_atr %>% group_by(EducationField) %>%
+  summarise(TotalEmployees = n(), DailyRate = round(mean(DailyRate, na.rm = T)), 
+            HourlyRate = round(mean(HourlyRate, na.rm = T)),
+            MonthlyIncome = round(mean(MonthlyIncome, na.rm = T)),
+            MonthlyRate = round(mean(MonthlyRate, na.rm = T)),
+            PercentSalaryHike = round(mean(PercentSalaryHike, na.rm = T))) %>%
+  arrange(desc(TotalEmployees)))
+```
+
+Comparing employee rate and income in each department based on gender 
+
+```{r eda2}
+kable(emp_atr %>% group_by(Department, Gender) %>%
+  summarise(TotalEmployees = n(), DailyRate = round(mean(DailyRate, na.rm = T)), 
+            HourlyRate = round(mean(HourlyRate, na.rm = T)),
+            MonthlyIncome = round(mean(MonthlyIncome, na.rm =T)),
+            PercentSalaryHike = round(mean(PercentSalaryHike, na.rm = T))))
+```
+
+Comparing employees with different job role based on monthly income and percentage hike in salary
+
+```{r eda3}
+kable(emp_atr %>% group_by(JobRole) %>%
+  summarise(TotalEmployees = n(), MonthlyIncome = round(mean(MonthlyIncome, na.rm =T)),
+            PercentSalaryHike = round(mean(PercentSalaryHike, na.rm = T))) %>%
+  arrange(desc(TotalEmployees)))
+```
+
+Determining employee attrition based on gender
+
+```{r eda4}
+kable(emp_atr %>% group_by(Gender, Attrition) %>%
+  summarise(TotalEmployees = n()))
+```
+
+Determining employee attrition based on job role
+
+```{r eda5}
+kable(emp_atr %>% group_by(JobRole, Attrition) %>%
+  summarise(TotalEmployees = n()))
+```
+
+Determining employee attrition based on working overtime
+
+```{r eda6}
+kable(emp_atr %>% group_by(OverTime, Attrition) %>%
+  summarise(TotalEmployees = n()))
+```
+
+### Dimension Reduction
+
+Determining correlation between different attributes
+
+```{r corr, warning=F, message=F}
+library(corrplot)
+cor_matrix <- cor(emp_atr[complete.cases(emp_atr), sapply(emp_atr, is.numeric)], method = "pearson")
+corrplot(cor_matrix, type = "upper")
+```
+
+Removing attributes that have very low correlation
+
+```{r dimreduce}
+emp_atr <- select(emp_atr, -c("Education", "DailyRate", "DistanceFromHome", "EnvironmentSatisfaction", "HourlyRate", 
+                              "JobInvolvement", "JobSatisfaction", "MonthlyRate", "NumCompaniesWorked",
+                              "PercentSalaryHike", "PerformanceRating", "RelationshipSatisfaction", "StockOptionLevel", 
+                              "TrainingTimesLastYear", "WorkLifeBalance"))
+```
+### Discretization
+
+Converting numerical attributes to categorical as Association Rule Mining works only with categorical variables
+
+```{r discretize, message = F, warning = F}
+library(arules)
+library(arulesViz)
+emp_atr$Age <- arules::discretize(emp_atr$Age, method = "fixed", 
+                            breaks = c(18, 30, 45, 60), labels = c("Below 30", "Between 30 and 45", "Above 45"))
+emp_atr$JobLevel <- arules::discretize(emp_atr$JobLevel, method = "interval",
+                            breaks = 5, labels = c("1", "2", "3", "4", "5"))
+emp_atr$MonthlyIncome <- arules::discretize(emp_atr$MonthlyIncome, method = "fixed",
+                            breaks = c(0,5000, 10000, 15000, 20000), labels = c("Less than 5000", "Between 5000 and 10000",
+                            "Between 10000 and 15000", "Above 15000"))
+emp_atr$TotalWorkingYears <- arules::discretize(emp_atr$TotalWorkingYears, method = "interval",
+                            breaks = 3, labels = c("Less", "Medium", "High"))
+emp_atr$YearsAtCompany <- arules::discretize(emp_atr$YearsAtCompany, method = "interval",
+                            breaks = 3, labels = c("Less", "Medium", "High"))
+emp_atr$YearsInCurrentRole <- arules::discretize(emp_atr$YearsInCurrentRole, method = "interval",
+                            breaks = 3, labels = c("Less", "Medium", "High"))
+```
+
+### Visualization
+
+#### Department vs Attritiom
+
+```{r bar, message = F, warning = F}
+library(ggplot2)
+ggplot(ea, aes(x = Department, fill = Attrition)) +
+  geom_bar()
+```
+
+Most of the employees who leave the company belong to Research and Development department
+
+#### MonthlyIncome vs Attrition
+
+```{r box}
+ggplot(ea, aes(x = Attrition, y = MonthlyIncome)) +
+  geom_boxplot()
+```
+
+Employees with less monthly income choose to leave the company
+
+#### MonthlyIncome vs YearsInCurrentRole
+
+```{r scatter}
+ggplot(ea,aes(x = YearsInCurrentRole, y = MonthlyIncome)) +
+  geom_point(aes(color = Gender, size = YearsAtCompany)) +
+  geom_smooth(method = "lm")
+```
+
+Male employees tend to earn more than female employees
+
+#### JobLevel density and Attrition
+
+```{r density}
+ggplot(ea, aes(JobLevel)) +
+  geom_density(aes(fill = Attrition)) +
+    labs(subtitle = "Job level grouped by Attrition", x="JobLevel",fill="Attrition")
+```
+
+Employees at lower job levels leave the company more often than the employees at higher level
+
+### Association Rule Mining
+
+#### Baseline model
+
+Generating transcational dataset from record dataset
+
+```{r transaction, message = F, warning = F}
+fac_var <- sapply(emp_atr, is.factor)
+employee <- as(emp_atr[, fac_var], "transactions")
+inspect(head(employee, 2))
+```
+
+Running Apriori on transactional dataset with default values
+
+```{r base, results = "hide"}
+rules_transaction <- apriori(employee)
+```
+
+```{r i1}
+inspect(head(rules_transaction, 5))
+```
+
+Fine tuning the baseline model by assigning support and confidence values
+
+```{r tuning1, warning = F, results = "hide"}
+rules_transaction <- apriori(employee, parameter = list(support = 0.01, confidence = 0.3, minlen = 3))
+```
+
+```{r i2}
+inspect(head(rules_transaction, 5))
+```
+
+- Very low value of support will simply include the rules that occoures by chance
+
+- Low confidence imples the inference made by the rule is not very reliable
+
+- Having low value of both support and confidence will lead to overfitting and produce a lot more rules than necessary
+
+Increasing the value of support and confidence and running the model
+
+```{r tuning2, results = "hide"}
+rules_transaction <- apriori(employee, parameter = list(support = 0.5, confidence = 0.95, minlen = 3))
+```
+
+```{r i3}
+inspect(head(rules_transaction, 5))
+```
+
+- We might miss out on some interesting rules if the value of support if very high
+
+- Having very high confidence will lead to underfitting ang generate fever rules than expected
+
+- Fine tuning the model with appropriate value of support and confidence is very essential in order to capture significant rules whose inference can be reliable
+
+Setting support to 0.1, confidence to 0.85 and inspecting the rules
+
+```{r tuning3,results = "hide"}
+rules_transaction <- apriori(employee, parameter = list(support = 0.1, confidence = 0.85, minlen = 3))
+```
+
+```{r i4, warning = F}
+inspect(head(rules_transaction, 5))
+```
+
+#### Predicting Attrition
+
+##### 1. Attrition = Yes
+
+``` {r leave}
+rules1 <- apriori(data = employee, parameter = list(supp = 0.01, conf = 0.5, minlen = 3),
+                 appearance = list(default = "lhs", rhs = "Attrition=Yes"),
+                 control = list(verbose = F))
+```
+
+Removing redundant rules
+
+```{r leaveredundant}
+subset_rules <- which(colSums(is.subset(rules1, rules1)) > 1)
+rules1 <- sort(rules1[-subset_rules], by = "lift", descreasing = T)
+```
+
+Top 5 rules for employees leaving the company
+
+```{r inspectleave}
+inspect(head(rules1, 5))
+```
+
+- From the top five rules it is evident that employees who often work overtime in sales department tend to leave the company
+ 
+- These rules are significant as they have high lift and confidence
+ 
+- Interesting rules are the ones in which single employees choose to leave the company
+
+Plot for rules with Attrition=Yes
+
+```{r leavescatter}
+plot(rules1, measure = c("support", "lift"), shading = "confidence", jitter = 0)
+```
+
+##### 2. Attrition = No
+
+``` {r stay}
+rules2 <- apriori(data = employee, parameter = list(supp = 0.1, conf = 0.5, minlen = 3),
+                 appearance = list(default = "lhs", rhs = "Attrition=No"),
+                 control = list(verbose = F))
+```
+
+Removing redundant rules
+
+```{r stayredundant}
+subset_rules <- which(colSums(is.subset(rules2, rules2)) > 1)
+rules2 <- sort(rules2[-subset_rules], by = "lift", descreasing = T)
+```
+
+Top 5 rules for employees staying with the company
+
+```{r stayinspect}
+inspect(head(rules2, 5))
+```
+
+- From the top 5 rules it is evident that employees who are in current role for quite some years tend to stay with the company
+
+- The interesting rules are the ones in which divorced employees choose to stay win the company
+
+Plot for rules with Attrition=No
+
+```{r stayscatter}
+plot(rules2, measure = c("support", "lift"), shading = "confidence", jitter = 0)
+```
+
+### Shiny App
+
+Link: [Association Rule Mining](https://nishithavenkatesh.shinyapps.io/associationrule/)

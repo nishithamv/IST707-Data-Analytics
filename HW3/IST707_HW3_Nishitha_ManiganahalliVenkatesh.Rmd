@@ -1,0 +1,518 @@
+# NBC, KNN, SVM, and Ensemble Learning
+
+#### Reading the training data from csv file
+
+```{r message=F, warning=F}
+library(tidyverse)
+disease_train <- read_csv("Disease Prediction Training.csv", col_types = cols())
+attr(disease_train, 'spec') <- NULL
+```
+
+#### Size of the training dataset
+
+```{r}
+dim(disease_train)
+```
+
+#### Internal sturcture of the weather forecast training dataset
+
+```{r}
+str(disease_train)
+```
+
+## Section 1: Data preparation
+
+#### Data quality issues
+
+##### Missing values
+
+```{r}
+sum(!complete.cases(disease_train))
+```
+
+There are no missing values in the dataset.
+
+##### Data outliers
+
+Data outliers can be determined by generating a boxpot for the desired attribute.
+
+###### Boxplot for High Blood Pressure
+
+```{r}
+boxplot(disease_train$`High Blood Pressure`)
+```
+
+As we can see there are extreme outliers in the high blood pressure values. These outliers can be replaced by the median value.
+
+```{r}
+disease_train$`High Blood Pressure`[disease_train$`High Blood Pressure` %in% boxplot.stats(disease_train$`High Blood Pressure`)$out] <- median(disease_train$`High Blood Pressure`, na.rm = T)
+boxplot(disease_train$`High Blood Pressure`)
+```
+
+The above boxplot shows distribution of high blood pressure after removing outliers.
+
+###### Boxplot for High Blood Pressure
+
+```{r}
+boxplot(disease_train$`Low Blood Pressure`)
+```
+
+Similar to high blood pressure, the extreme outliers in low blood pressure are also replaced by the corresponding median values.
+
+```{r}
+disease_train$`Low Blood Pressure`[disease_train$`Low Blood Pressure` %in% boxplot.stats(disease_train$`Low Blood Pressure`)$out] <- median(disease_train$`Low Blood Pressure`, na.rm = T)
+boxplot(disease_train$`Low Blood Pressure`)
+```
+
+The above boxplot shows distribution of low blood pressure after removing outliers.
+
+#### Numerization
+
+The machine learning algorithms to be implemented work well with numerical data. So we create dummy variables for categorical values using onehot encoding. Also converting the target variable to factors.
+
+```{r message=F, warning=F}
+library(onehot)
+encoder <- onehot(disease_train, stringsAsFactors = TRUE, max_levels = 20)
+train_1 <- data.frame(predict(encoder, disease_train))
+disease_train$Disease <- as.factor(disease_train$Disease)
+train_1$Disease <- as.factor(train_1$Disease)
+```
+
+#### Data normalization and standardization
+
+Distance based machine learning algorithms require the data to be scaled in order to bring all th features to the same level. Hence, we scale all the numeric features in the datase provided.
+
+```{r}
+train_2 <- train_1
+train_2$Age <- scale(train_1$Age, center = TRUE, scale = TRUE)
+train_2$Height <- scale(train_1$Height, center = TRUE, scale = TRUE)
+train_2$Weight <- scale(train_1$Weight, center = TRUE, scale = TRUE)
+train_2$High.Blood.Pressure <- scale(train_1$High.Blood.Pressure, center = TRUE, scale = TRUE)
+train_2$Low.Blood.Pressure <- scale(train_1$Low.Blood.Pressure, center = TRUE, scale = TRUE)
+```
+
+#### Train and validation datasets
+
+Since we require validation dataset to determine the accuracy of the model, we split the train dataset into train and validation data. 
+Test data: 80%
+Validation data: 20%
+
+```{r message = F, warning = F}
+library(caret)
+set.seed(188)
+train_index <- createDataPartition(train_1$Disease, p = 0.8, list = FALSE)
+strain1 <- train_1[train_index, ]
+sval1 <- train_1[-train_index, ]
+
+train_index <- createDataPartition(train_2$Disease, p = 0.8, list = FALSE)
+strain2 <- train_2[train_index, ]
+sval2 <- train_2[-train_index, ]
+```
+
+#### Exploratory data analysis
+
+##### How many patients have cardiac disease?
+
+```{r message = F, warning = F}
+library(ggplot2)
+ggplot(disease_train) +
+  geom_bar(aes(x = Disease))
+```
+
+The train dataset has equal nuber of people who have and don't have disease.
+
+##### How many patients who smoke have disease?
+
+```{r}
+ggplot(disease_train) +
+  geom_bar(aes(x = Smoke, fill = Disease))
+```
+
+We see that most of the patients who don't smoke have the disease. 
+
+##### How many patients who drink have disease?
+
+```{r}
+ggplot(disease_train) +
+  geom_bar(aes(x = Alcohol, fill = Disease))
+```
+
+Very few patients who drink don't have the disease.
+
+##### How many patients who exercise regularly have disease?
+
+```{r}
+ggplot(disease_train) +
+  geom_bar(aes(x = Exercise, fill = Disease))
+```
+
+Patients who exercise regularly have the disease.
+
+##### What proportion of male and female patients have cardiac disease?
+
+```{r}
+ggplot(disease_train, aes(x = Disease, fill = Gender)) + 
+  geom_bar(position = "dodge")
+```
+
+We see that most of the female patients have the disease.
+
+## Section 2: Build, tune and evaluate various machine learning algorithms
+
+#### Naive Bayes Classifier
+
+The Naive Bayes Classifier is trained using 3 fold cross validation for resampling and tuning the values of fl between 1 and 3, userkernel as TRUE or FALSE.
+
+```{r message = F, warning = F}
+library(klaR)
+start_time <- Sys.time()
+model_nb <- train(Disease ~ ., data = strain1, method = "nb",
+             trControl = trainControl(method = "cv", number = 3),
+             tuneGrid = expand.grid(fL = 1:3, usekernel = c(TRUE, FALSE), adjust = 1:3))
+
+nb_time <- Sys.time() - start_time
+
+model_nb
+
+nb_time
+```
+
+The final model generated has fL = 1 for zero probability issue and considers a normal density function.
+
+##### Performance evaluation of NBC
+
+Performance of the model can be determined by obtaining the confusion matrix for the validation dataset.
+
+```{r message = F, warning = F}
+predict_nb <- predict(model_nb, newdata = sval1, type = "raw")
+confusionMatrix(predict_nb, sval1$Disease)
+```
+
+- The classifier built has an accuracy of 68.7%.
+
+- It correctly predicts 78% of positive cases and 58% percent of negative cases.
+
+```{r message = F, warning = F}
+library(pROC)
+
+nb_pred_prob <- predict(model_nb, newdata = sval1, type = "prob")
+nb_roc <- roc(sval1$Disease, nb_pred_prob$'1', print.auc = TRUE)
+plot(nb_roc, main = "Naive Bayes ROC")
+```
+
+```{r message = F, warning = F}
+auc(nb_roc)
+```
+
+#### K-Nearest Neighbors
+
+The KNN model is built for number of neighbors ranging between 1 to 10. 
+
+```{r message = F, warning = F}
+start_time <- Sys.time()
+
+model_knn <- train(Disease ~ ., data = strain2, method = "knn",
+                    tuneGrid = data.frame(k = seq(1, 10)),
+                    trControl = trainControl(method = "cv", number = 3))
+knn_time <- Sys.time() - start_time
+
+model_knn
+
+knn_time
+```
+
+The model has 9 nearest neighbors.
+
+##### Performance evaluation of KNN
+
+Obtaining confusion matrix for validation data to evaluate performance.
+
+```{r message = F, warning = F}
+predict_knn <- predict(model_knn, newdata = sval2)
+confusionMatrix(predict_knn, sval2$Disease)
+```
+
+- The model has an accuracy of 71%.
+
+- It has a probability of 0.72 of correctly predicting positive cases and a probability of 0.69 of correctly predicting negative cases.
+
+```{r message = F, warning = F}
+knn_pred_prob <- predict(model_knn, newdata = sval2, type = "prob")
+knn_roc <- roc(sval2$Disease, knn_pred_prob$'1', print.auc = TRUE)
+plot(knn_roc, main = "KNN ROC")
+```
+
+```{r message = F, warning = F}
+auc(knn_roc)
+```
+
+#### Random Forest
+
+The random forest model is bulit for different number of variables available for split (2, 5, 9, 15) with a 3 fold cross validation.
+
+```{r message = F, warning = F}
+library(randomForest)
+
+start_time <- Sys.time()
+
+model_rf <- train(Disease ~ ., data = strain2, method = "rf",
+                   trGrid = expand.grid(.mtry = c(2, 5, 9, 15)),
+                   trControl = trainControl(method = "cv", number = 3))
+rf_time <- Sys.time() - start_time
+
+model_rf
+
+rf_time
+```
+
+The final model has 2 variables available for splitting at each tree node.
+
+##### Performance evaluation of RF
+
+Confusion matrix is used to determine the performance of the model.
+
+```{r message = F, warning = F}
+predict_rf <- predict(model_rf, newdata = sval2)
+confusionMatrix(predict_rf, sval2$Disease)
+```
+
+- The model has an accuracy of 73.1%.
+
+- It has a sensitivity of 0.78 and specificity of 0.67.
+
+```{r message = F, warning = F}
+rf_pred_prob <- predict(model_rf, newdata = sval2, type = "prob")
+rf_roc <- roc(sval2$Disease, rf_pred_prob$'1', print.auc = TRUE)
+plot(rf_roc, main = "Random Forest ROC")
+```
+
+```{r message = F, warning = F}
+auc(rf_roc)
+```
+
+#### Gradient Boost Machine
+
+The GBM model is trained with 3 repeated 5 fold cross validation.
+
+```{r message = F, warning = F, results = 'hide'}
+library(gbm)
+
+start_time <- Sys.time()
+
+model_gbm <- train(Disease ~ ., data = strain2, method = "gbm",
+                   trControl = trainControl(method = "cv", number =  3))
+
+gbm_time <- Sys.time() - start_time
+```
+
+```{r message = F, warning = F}
+model_gbm
+
+gbm_time
+```
+
+The final model has 150 tress with interaction depth of 3 and 0.1 shrinkage.
+
+##### Performance evaluation of GBM
+
+A confusion matrix for the validation data is created for evaluating the performance of the model.
+
+```{r message = F, warning = F}
+predict_gbm <- predict(model_gbm, newdata = sval2)
+confusionMatrix(predict_gbm, sval2$Disease)
+```
+
+- GBM has an accuracy of 73.5%.
+
+- It has good sensitivity and specificity of 0.76 and 0.70 respectively.
+
+```{r message = F, warning = F}
+gbm_pred_prob <- predict(model_gbm, newdata = sval2, type = "prob")
+gbm_roc <- roc(sval2$Disease, gbm_pred_prob$'1', print.auc = TRUE)
+plot(gbm_roc, main = "GBM ROC")
+```
+
+```{r message = F, warning = F}
+auc(gbm_roc)
+```
+
+#### Support Vector Machine
+
+##### Linear SVM
+
+Linear SVM is trained with 5 fold bootstrap for for penalty cost C ranging between 0, 1 0.05.
+
+```{r message = F, warning = F}
+start_time <- Sys.time()
+
+model_svm_linear <- train(Disease ~ ., data = strain2, method = "svmLinear",
+                          trControl = trainControl(method = "cv", number = 3), 
+                          tuneGrid = expand.grid(C = seq(0, 1, 0.05)))
+
+lsvm_time <- Sys.time() - start_time
+
+model_svm_linear
+
+lsvm_time
+```
+
+The linear model has cost C of 0.55 for each penalty.
+
+##### Performance evaluation of linear SVM
+
+Deteriming the performance of the model using confusion matrix.
+
+```{r message = F, warning = F}
+predict_svm_linear <- predict(model_svm_linear, newdata = sval2)
+confusionMatrix(predict_svm_linear, sval2$Disease)
+```
+
+- The model has an accuracy of 72.7%.
+
+- It has high sensitivity of 0.81 and  specificity of 0.64.
+
+- It has higher probability of correctly predicting if a patient has a disease or not.
+
+##### Non-linear SVM
+
+The non linear model is trained with 3 fold cross validationn model for various values of sigma (0, 1, 0.1) and cost (0, 1, 0.1).
+
+```{r message = F, warning = F}
+library(kernlab)
+
+start_time <- Sys.time()
+
+model_svm_rbf <- ksvm(Disease ~ ., data = strain2, method = "svmRadial",
+                       tuneGrid = expand.grid(sigma = seq(0, 1, 0.1),
+                                              C = seq(0, 1, 0.1)),
+                       trControl = trainControl(method = "cv", number = 3))
+
+nlsvm_time <- Sys.time() - start_time
+
+model_svm_rbf
+
+nlsvm_time
+```
+
+The final model has cost 1 for each penalty and sigma 0.06.
+
+##### Performance evaluation of non-linear SVM
+
+Evaluating the performance using confusion matrix
+
+```{r message = F, warning = F}
+predict_svm_rbf <- predict(model_svm_rbf, newdata = sval2)
+confusionMatrix(predict_svm_rbf, sval2$Disease)
+```
+
+- The model has an accuracy of 73.5%
+
+- It correctly predicts the presence of disease 78% of the times and absence of disease 68% of the times.
+
+#### Best performing models
+
+Model          | Hyper-parameters
+---------------|-----------------
+NBC            | fL = 1, usekernel = FALSE, adjust = 1
+KNN            | k = 9
+Random Forest  | mtry = 2
+GBM            | n.trees = 150, interaction.depth = 3, shrinkage = 0.1, n.minobsinnode = 10
+SVM linear     | C = 0.55
+SVM non-linear | sigma = 0.06, C = 1
+
+- The most commonly used metric for performance evaluation is RMSE.
+
+- In order to produce unbiased and low variance estimates, performance of the models can be determined by using hold out methods like creating a confusion matrix for the validation data.
+
+- Another metric that can be used id ROC curve. The advantage is that it is independent of the change in proportion of data points.
+
+- For classification problems Gini coefficient can be used for evaluating the models.
+
+- Perofrmance of the above models are estimated using confusion matrix.
+
+## Section 3: Prediction and interpretation
+
+#### Reading the testing data from csv file
+
+```{r}
+disease_test <- read_csv("Disease Prediction Testing.csv", col_types = cols())
+```
+
+#### Data Outliers
+
+Replacing data outliers in High Blood Pressure and Low Blood Pressure with the median values.
+
+```{r}
+disease_test$`High Blood Pressure`[disease_test$`High Blood Pressure` %in% boxplot.stats(disease_test$`High Blood Pressure`)$out] <- median(disease_test$`High Blood Pressure`, na.rm = T)
+disease_test$`Low Blood Pressure`[disease_test$`Low Blood Pressure` %in% boxplot.stats(disease_test$`Low Blood Pressure`)$out] <- median(disease_test$`Low Blood Pressure`, na.rm = T)
+```
+
+#### Numerization, normalization and standardization
+
+Since the models are trained by coneverting categorical variables to dummies and scaling hte numeric vales, it is necessary to do the same with the testing dataset inorder to get accurate predictions.
+
+```{r}
+encoder <- onehot(disease_test, stringsAsFactors = TRUE, max_levels = 20)
+test1 <- data.frame(predict(encoder, disease_test))
+
+test2 <- test1
+test2$Age <- scale(test1$Age, center = TRUE, scale = TRUE)
+test2$Height <- scale(test1$Height, center = TRUE, scale = TRUE)
+test2$Weight <- scale(test1$Weight, center = TRUE, scale = TRUE)
+test2$High.Blood.Pressure <- scale(test1$High.Blood.Pressure, center = TRUE, scale = TRUE)
+test2$Low.Blood.Pressure <- scale(test1$Low.Blood.Pressure, center = TRUE, scale = TRUE)
+```
+
+#### Prediction using Naive Bayes Classifier
+
+```{r message = F, warning = F}
+nbc_pred <- predict(model_nb, newdata = test1, type = "raw")
+```
+
+#### Prediction using K-Nearest Neighbors
+
+```{r message = F, warning = F}
+knn_pred <- predict(model_knn, newdata = test2)
+```
+
+#### Prediction using Random Forest
+
+```{r message = F, warning = F}
+rf_pred <- predict(model_rf, newdata = test2)
+```
+
+#### Prediction using Gradient Boost Machine
+
+```{r message = F, warning = F}
+gbm_pred <- predict(model_gbm, newdata = test2)
+```
+
+#### Prediciton using linear Support Vector Machine
+
+```{r message = F, warning = F}
+lsvm_pred <- predict(model_svm_linear, newdata = test2)
+```
+
+#### Prediction using non-linear Suppport Vector Machine
+
+```{r}
+nlsvm_pred <- predict(model_svm_rbf, newdata = test2)
+```
+
+#### Combining the predictions made by all six models
+
+```{r}
+prediction <- data.frame(ID = disease_test$ID)
+prediction$NBC <- nbc_pred
+prediction$KNN <- knn_pred
+prediction$'SVM-Linear' <- lsvm_pred
+prediction$'SVM-RBF' <- nlsvm_pred
+prediction$RF <- rf_pred
+prediction$GBM <- gbm_pred
+```
+
+#### Writing prediction results to csv file
+
+```{r}
+write.csv(prediction, "prediction.csv")
+```

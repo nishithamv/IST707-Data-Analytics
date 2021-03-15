@@ -1,0 +1,808 @@
+# Statistical Learning, Deep Learning and A Complete Comparison
+
+#### Reading the training data from csv file
+
+```{r message=F, warning=F}
+library(tidyverse)
+
+disease_train <- read_csv("Disease Prediction Training(2).csv", col_types = cols())
+attr(disease_train, 'spec') <- NULL
+```
+
+#### Size of the training dataset
+
+```{r message=F, warning=F}
+dim(disease_train)
+```
+
+#### Internal sturcture of the weather forecast training dataset
+
+```{r message=F, warning=F}
+str(disease_train)
+```
+
+## Section 1: Data preparation
+
+#### Valid column names
+
+The column names have multiple wwords which are seperated by whitespace, which might be difficult to understand by some training methods. Hence, we convert them to vaild names.
+
+```{r message = F, warning = F}
+colnames(disease_train) <- make.names(colnames(disease_train))
+```
+
+#### Data quality issues
+
+##### Missing values
+
+```{r message=F, warning=F}
+sum(!complete.cases(disease_train))
+```
+
+There are no missing values in the dataset.
+
+##### Data outliers
+
+There are extreme outliers in High Blood Pressure, Low Blood Pressure these outliers can be winsorized.
+
+The exterme outliers in Height and Weight on the lower end are practically not possible, these outlier can also be winsorized. The outliers towards the higher end in these columns can be posiible. So, we can retain them.
+
+```{r message=F, warning=F}
+winsorize <- function(x){
+   qnt <- quantile(x, probs = c(.25, .75), na.rm = T)
+   caps <- quantile(x, probs = c(.05, .95), na.rm = T)
+   bound <- 1.5 * IQR(x, na.rm = T)
+   if((x == disease_train$Height) | (x == disease_train$Weight)){
+     x[x < (qnt[1] - bound)] <- caps[1]
+   }
+   else{
+     x[x < (qnt[1] - bound)] <- caps[1]
+     x[x > (qnt[2] + bound)] <- caps[2]
+   }
+   return(x)
+}
+
+disease_train$High.Blood.Pressure <- winsorize(disease_train$High.Blood.Pressure)
+disease_train$Low.Blood.Pressure <- winsorize(disease_train$Low.Blood.Pressure)
+disease_train$Height <- winsorize(disease_train$Height)
+disease_train$Weight <- winsorize(disease_train$Weight)
+```
+
+The values less than Q1 - 1.5(IQR) are winsorized to 5th percentile and the values greater than Q3 + 1.5(IQR) are winsorized to 95th percentile.
+
+##### Erroneous data 
+
+```{r message=F, warning=F}
+nrow(disease_train[disease_train$High.Blood.Pressure < disease_train$Low.Blood.Pressure,])
+```
+
+There are some observations in which High Blood Pressure is lower than Low Blood Pressure which is not possible. In such cases we can swap the values.
+
+```{r message=F, warning=F}
+index <- which(disease_train$High.Blood.Pressure < disease_train$Low.Blood.Pressure)
+for(i in index){
+  x <- disease_train[i, "High.Blood.Pressure"]
+  disease_train[i, "High.Blood.Pressure"] <- disease_train[i, "Low.Blood.Pressure"]
+  disease_train[i, "Low.Blood.Pressure"] <- x
+}
+```
+
+##### Duplicate data
+
+```{r message=F, warning=F}
+nrow(disease_train[duplicated(disease_train), ])
+```
+
+Removing the 1798 duplicate observations from the dataframe.
+
+```{r message=F, warning=F}
+disease_train <- disease_train[!duplicated(disease_train), ]
+```
+
+#### Factorizing traget variable
+
+Most of the machine learning algorithms require target variable to be factors in order to work efficiently.
+
+```{r message=F, warning=F}
+disease_train$Disease <- as.factor(disease_train$Disease)
+```
+
+#### Training and validation datasets
+
+Since we require validation dataset to determine the performance of the model, we split the train dataset into training and validation data. 
+Test data: 80%
+Validation data: 20%
+
+```{r message = F, warning = F}
+library(caret)
+
+set.seed(188)
+train_index <- createDataPartition(disease_train$Disease, p = 0.8, list = FALSE)
+strain1 <- disease_train[train_index, ]
+sval1 <- disease_train[-train_index, ]
+```
+
+#### Numerization and standardization using recipes
+
+ANNs perform faster when features are standardized. We are performing all required numerization(onehot encoding) and standardization(scaling and mormalizing) using the 'recipies' package.
+
+```{r message = F, warning = F}
+library(recipes)
+
+rec_obj <- recipe(Disease ~ ., data = strain1) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_center(all_predictors(), -all_outcomes()) %>%
+  step_scale(all_predictors(), -all_outcomes()) %>%
+  prep(data = strain1)
+```
+
+Applying the above recipe on training and validation data to convert it to dataset required for ANN.
+
+```{r message = F, warning = F}
+x_strain2 <- bake(rec_obj, new_data = strain1) %>% select(-Disease)
+x_sval2  <- bake(rec_obj, new_data = sval1) %>% select(-Disease)
+```
+
+Storing the target variable as a vector whihc is needed for modeling ANN.
+
+```{r message = F, warning = F}
+y_strain2 <- ifelse(pull(strain1, Disease) == 1, 1, 0)
+y_sval2  <- ifelse(pull(sval1, Disease) == 1, 1, 0)
+```
+
+#### Exploratory data analysis
+
+##### How many patients have cardiac disease?
+
+```{r message = F, warning = F}
+library(ggplot2)
+
+ggplot(disease_train) +
+  geom_bar(aes(x = Disease))
+```
+There are around 2400 patients who have disease and 2400 who don't have disease.
+
+##### What proportion of male and female patients have cardiac disease?
+
+```{r}
+ggplot(disease_train, aes(x = Disease, fill = Gender)) + 
+  geom_bar(position = "dodge")
+```
+
+Most of the female patients have the disease compared to male patients.
+
+##### How does high blood pressure affect disease?
+
+```{r}
+ggplot(disease_train, aes(x = Disease, y = High.Blood.Pressure)) + 
+  stat_summary(fun.y = "mean", geom = "bar")
+```
+
+People with average high blood pressure greater than 125 tend to have the disease.
+
+##### Is disease affected by cholesterol?
+
+```{r}
+ggplot(disease_train, aes(x = Disease, fill = Cholesterol)) + 
+  geom_bar(position = "dodge")
+```
+
+People with cholesterol above normal usually tend to have the disease.
+
+## Section 2: Build, tune and evaluate various machine learning algorithms
+
+#### Logistic Regression
+
+Logistic regression model is built using the glm method in caret package with 3 fold cross validation.
+
+glm method doesn't have any tuning parameter.
+
+```{r message = F, warning = F}
+start_time <- Sys.time()
+
+lr_model <- train(Disease ~ ., data = strain1,
+                  method = "glm", family = "binomial", 
+                  trControl = trainControl(method = "cv", number = 3))
+
+lr_time <- Sys.time() - start_time
+
+lr_model
+
+lr_time
+```
+
+##### Performance evaluation of Logistic Regression
+
+Evaluating the performance of logistic regression model using hold out method by creating confusion matrix and determining its accuracy.
+
+```{r message = F, warning = F}
+predict_lr <- predict(lr_model, newdata = sval1)
+confusionMatrix(predict_lr, sval1$Disease)
+```
+
+Linear regression model has an accuray of 73%
+
+##### ROC curve for Logestic Regression
+
+```{r message = F, warning = F}
+library(pROC)
+
+lr_pred_prob <- predict(lr_model, newdata = sval1, type = "prob")
+lr_roc <- roc(sval1$Disease, lr_pred_prob$'1', print.auc = TRUE)
+plot(lr_roc, main = "Logestic Regression ROC")
+```
+
+##### AUC score for Logestic Regression
+
+```{r message = F, warning = F}
+auc(lr_roc)
+```
+
+#### Decision Tree
+
+Decision tree model is trained with parameters tuned for the minimum number of observations that must exist in a node in order for a split to be attempted (minsplit), the minimum number of observations in any terminal node (minbucket) and maximum depth of any node of the final tree (maxdepth).
+
+```{r message = F, warning = F}
+library(caret)
+library(rpart)
+
+start_time <- Sys.time()
+
+dt_model <- train(Disease ~ ., data = strain1, metric = "Accuracy", method = "rpart",
+                  trControl = trainControl(method = "cv", number = 3),
+                  tuneLength = 8,
+                  control = rpart.control(minsplit = 40, minbucket = 10, maxdepth = 30))
+
+dt_time <- Sys.time() - start_time
+
+dt_model
+
+dt_time
+```
+
+The final model has a complexity parameter (cp) of 0.0012
+
+##### Performance evaluation of Decision Tree
+
+Performance of decision tree can be evaluated using confusion matrix.
+
+```{r message = F, warning = F}
+predict_dt <- predict(dt_model, newdata = sval1)
+confusionMatrix(predict_dt, sval1$Disease)
+```
+
+The model has an accuracy of 73% on the validation dataset.
+
+##### ROC curve for Decision Tree
+
+```{r message = F, warning = F}
+dt_pred_prob <- predict(dt_model, newdata = sval1, type = "prob")
+dt_roc <- roc(sval1$Disease, dt_pred_prob$'1', print.auc = TRUE)
+plot(dt_roc, main = "Decision Tree ROC")
+```
+
+##### AUC score for Decision Tree
+
+```{r message = F, warning = F}
+auc(dt_roc)
+```
+
+#### Artificial Neural Network
+
+Using Multi-Layer Perceptron (MLP) as they are good at classification. The hidden layers and output layers are what controls the ANN inner workings. Since it is a binary classification problem, we have only one node in the output layer. The output layer uses sigmoid activation function and log loss function since there are only two output classes.
+
+##### ANN0
+
+For ANN with zero hidden layers the input layer is directly connected to the output layer. . It uses adam optimization algorithm.
+
+```{r message = F, warning = F}
+library(keras)
+library(tensorflow)
+
+keras_model0 <- keras_model_sequential()
+
+keras_model0 %>%
+  layer_dense(units = 1, 
+              kernel_initializer = "uniform", 
+              activation = "sigmoid",
+              input_shape = ncol(x_strain2)) %>%
+  compile(optimizer = "adam",
+          loss = "binary_crossentropy",
+          metrics = c("accuracy"))
+
+keras_model0
+```
+
+Running ANN0 on training data with 60 samples per gradient update within each epoch and 75 training cycles. We set validation_split = 0.2 to include 20% of the data for model validation, which prevents overfitting.
+
+```{r message = F, warning = F, results = 'hide'}
+start_time <- Sys.time()
+
+ann0_model <- fit(object = keras_model0, 
+                  x = as.matrix(x_strain2), 
+                  y = y_strain2,
+                  batch_size = 60, 
+                  epochs = 75,
+                  validation_split = 0.2)
+
+ann0_time <- Sys.time() - start_time
+```
+
+Inspecting the training history for ANN0.
+
+```{r message = F, warning = F}
+ann0_model
+
+ann0_time
+```
+
+There's very small difference training and validation accuracy.
+
+Visualizing the training results for ANN0.
+
+```{r message = F, warning = F}
+plot(ann0_model)
+```
+
+###### Predictions of ANN0
+
+Predicting the output class and class probability of validation data using ANN0.
+
+```{r message = F, warning = F}
+library(yardstick)
+
+#predicted class
+yhat_keras_class_vec <- predict_classes(object = keras_model0, x = as.matrix(x_sval2)) %>%
+  as.vector()
+
+#pedicted class probability
+yhat_keras_prob_vec  <- predict_proba(object = keras_model0, x = as.matrix(x_sval2)) %>%
+    as.vector()
+```
+
+Creating a data frame with actual value, estimated value and probability of the validation data.
+
+```{r message = F, warning = F}
+estimates_ann0 <- tibble(truth = as.factor(y_sval2),
+                              estimate = as.factor(yhat_keras_class_vec),
+                              class_prob = yhat_keras_prob_vec)
+
+options(yardstick.event_first = FALSE)
+```
+
+Obtaining confusion table for validation data to examine the performance.
+
+```{r message = F, warning = F}
+estimates_ann0 %>% conf_mat(truth, estimate)
+```
+
+Determining accuracy of validation dataset.
+
+```{r message = F, warning = F}
+estimates_ann0 %>% metrics(truth, estimate)
+```
+
+ANN0 correctly predicts the class 73% of the time.
+
+AUC score of ANN0.
+
+```{r message = F, warning = F}
+estimates_ann0 %>% roc_auc(truth, class_prob)
+```
+
+##### ANN1
+
+In case of ANN with one hidden layer, the input layer is connected to the first hidden layer which has 50 nodes and uses relu activation function. Dropout layer is used to control overfitting which eliminates weights below 0.1 for the first hidden layer.
+
+```{r message = F, warning = F}
+keras_model1 <- keras_model_sequential()
+
+keras_model1 %>%
+  layer_dense(units = 50,
+              kernel_initializer = "uniform",
+              activation = "relu",
+              input_shape = ncol(x_strain2)) %>%
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 1, 
+              kernel_initializer = "uniform", 
+              activation = "sigmoid") %>%
+  compile(optimizer = "adam",
+          loss = "binary_crossentropy",
+          metrics = c("accuracy"))
+
+keras_model1
+```
+
+Running ANN1 on training data with 50 samples per gradient update within each epoch and 75 training cycles. We set validation_split = 0.2 to include 20% of the data for model validation, which prevents overfitting.
+
+```{r message = F, warning = F, results = 'hide'}
+start_time <- Sys.time()
+
+ann1_model <- fit(object = keras_model1, 
+                  x = as.matrix(x_strain2), 
+                  y = y_strain2,
+                  batch_size = 50, 
+                  epochs = 75,
+                  validation_split = 0.2)
+
+ann1_time <- Sys.time() - start_time
+```
+
+Inspecting the training history for ANN1.
+
+```{r message = F, warning = F}
+ann1_model
+
+ann1_time
+```
+
+Both training and validation data have almost the same loss and accuracy values.
+
+Visualizing training results for ANN1.
+
+```{r message = F, warning = F}
+plot(ann1_model)
+```
+
+###### Predictions of ANN1
+
+Predicting the output class and class probability of validation data using ANN1.
+
+```{r message = F, warning = F}
+
+#predicted class
+yhat_keras_class_vec <- predict_classes(object = keras_model1, x = as.matrix(x_sval2)) %>%
+  as.vector()
+
+#predicted class probability
+yhat_keras_prob_vec  <- predict_proba(object = keras_model1, x = as.matrix(x_sval2)) %>%
+    as.vector()
+```
+
+Creating a data frame with actual value, estimated value and probability of the validation data.
+
+```{r message = F, warning = F}
+estimates_ann1 <- tibble(truth = as.factor(y_sval2),
+                              estimate = as.factor(yhat_keras_class_vec),
+                              class_prob = yhat_keras_prob_vec)
+
+options(yardstick.event_first = FALSE)
+```
+
+Obtaining confusion table for validation data to examine the performance.
+
+```{r message = F, warning = F}
+estimates_ann1 %>% conf_mat(truth, estimate)
+```
+
+Determining accuracy of validation dataset.
+
+```{r message = F, warning = F}
+estimates_ann1 %>% metrics(truth, estimate)
+```
+
+ANN1 correctly predicts the class 73% of the time.
+
+AUC score of ANN1.
+
+```{r message = F, warning = F}
+estimates_ann1 %>% roc_auc(truth, class_prob)
+```
+
+##### ANN2
+
+For ANN with two hidden layers, the inupt is fed to the first hidden layer. The first layer has 50 nodes and uses the sigmoid activation function. The second hidden layer uses tanh activation function and has 35 nodes. Both the layers have a dropout rate of 0.1. 
+
+```{r message = F, warning = F}
+keras_model2 <- keras_model_sequential()
+
+keras_model2 %>%
+  layer_dense(units = 50,
+              kernel_initializer = "uniform",
+              activation = "sigmoid",
+              input_shape = ncol(x_strain2)) %>%
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 35,
+              kernel_initializer = "uniform",
+              activation = "tanh") %>% 
+  layer_dropout(rate = 0.1) %>%
+  layer_dense(units = 1, 
+              kernel_initializer = "uniform", 
+              activation = "sigmoid") %>%
+  compile(optimizer = "adam",
+          loss = "binary_crossentropy",
+          metrics = c("accuracy"))
+
+keras_model2
+```
+
+Running ANN2 on training data with 50 samples per gradient update within each epoch and 75 training cycles. We set validation_split = 0.2 to include 20% of the data for model validation, which prevents overfitting.
+
+```{r message = F, warning = F, results = 'hide'}
+start_time <- Sys.time()
+
+ann2_model <- fit(object = keras_model2, 
+                  x = as.matrix(x_strain2), 
+                  y = y_strain2,
+                  batch_size = 50, 
+                  epochs = 75,
+                  validation_split = 0.2)
+
+ann2_time <- Sys.time() - start_time
+```
+
+Inspecting the training history for ANN1.
+
+```{r message = F, warning = F}
+ann2_model
+
+ann2_time
+```
+
+Both training and validation data have almost the same loss and accuracy values.
+
+Visualizing training results for ANN2.
+
+```{r message = F, warning = F}
+plot(ann2_model)
+```
+
+###### Predictions of ANN2
+
+Predicting the output class and class probability of validation data using ANN2.
+
+```{r message = F, warning = F}
+
+#predicted class
+yhat_keras_class_vec <- predict_classes(object = keras_model2, x = as.matrix(x_sval2)) %>%
+  as.vector()
+
+#predicted class probability
+yhat_keras_prob_vec  <- predict_proba(object = keras_model2, x = as.matrix(x_sval2)) %>%
+    as.vector()
+```
+
+Creating a data frame with actual value, estimated value and probability of the validation data.
+
+```{r message = F, warning = F}
+estimates_ann2 <- tibble(truth = as.factor(y_sval2),
+                              estimate = as.factor(yhat_keras_class_vec),
+                              class_prob = yhat_keras_prob_vec)
+
+options(yardstick.event_first = FALSE)
+```
+
+Obtaining confusion table for validation data to examine the performance.
+
+```{r message = F, warning = F}
+estimates_ann2 %>% conf_mat(truth, estimate)
+```
+
+Determining accuracy of validation dataset.
+
+```{r message = F, warning = F}
+estimates_ann2 %>% metrics(truth, estimate)
+```
+
+ANN2 correctly predicts the class 73% of the time.
+
+AUC score of ANN2.
+
+```{r message = F, warning = F}
+estimates_ann2 %>% roc_auc(truth, class_prob)
+```
+
+#### Best performing models
+
+Model     | Hyper-parameters
+----------|-----------------
+LR        | -
+DT        | minsplit = 40, minbucket = 10, maxdepth = 30
+ANN0      | output layer: optimizer = "adam", loss = "binary_crossentropy"
+         || batch_size = 60, epochs = 75
+ANN1      | hidden layer 1: units = 50, activation = "relu", dropout rate = 0.1
+         || output layer: optimizer = "adam", loss = "binary_crossentropy"
+         || batch_size = 50, epochs = 75
+ANN2      | hidden layer 1: units = 50, activation = "sigmoid", dropout rate = 0.1
+         || hidden layer 2: units = 35, activation = "tanh", dropout rate = 0.1
+         || output layer: optimizer = "adam", loss = "binary_crossentropy"
+         || batch_size = 50, epochs = 75
+
+#### Model performance evaluation methods
+
+- The above models are evaulated based on accuracy and AUC score.
+
+- In order to produce unbiased and low variance estimates, performance of the models can be determined by using hold out methods like creating a confusion matrix for the validation data.
+
+- The advantage of ROC curve and AUC score is that it is independent of the change in proportion of data points.
+
+- Another measure that could be used is time complexity.
+
+#### Comparing Linear SVM, Logistic Regression, and Single Layer Perceptron
+
+1. Accuracy
+
+- Linear SVM: 0.7274
+
+- Logistic Regression: 0.7317
+
+- Single Layer Perceptron: 0.7305
+
+Based on accuracy of validation data, both logistic regression and single layer perceptron perform slightly better than linear SVM.
+
+Both single layer perceptron and linear SVM cannot fully separate problems that are not linearly separable. 
+
+SVM tries to finds the best margin that separates the classes and this reduces the risk of error on the data, while logistic regression does not, instead it can have different decision boundaries with different weights that are near the optimal point.
+
+The risk of overfitting is less in SVM, while logistic regression is vulnerable to overfitting.
+
+Logistic regression and linear SVM can be used when we have fewer features and large number of observations. Both have similar performance but depending on your features, one may be more efficient than the other.
+
+Logistic regression and single layer perceptron are similar to each other. In logistic regression weights are assigned to each feature to determine the class of target variable. It is a linear method, but are transformed using the logistic function. 
+
+In case of single layer perceptron input layer is directly fed to the output layer with weights and activation function which is sigmoid in case of binary classification. The sigmoid fucntion works similar to the logistic function. 
+
+Logistic regression, linear SVM and single layer perceptron work well with linearly separable problem.
+
+## Section 3: Combination and Comparison of Multiple Machine Learning Algorithms
+
+#### Decision Tree vs Logistic Regression and Ensemble Learning methods 
+
+Comparing the decision tree model trained above with other models.
+
+Best performing decision tree model.
+
+```{r message = F, warning = F}
+dt_model$finalModel
+```
+
+- High blood pressure is the root node for the best decision tree model, it is statistically significant in logistic regression and has overall high importance. Hence both the models are consistent.
+
+- High blood pressure and age has has overall high importance in both random forest and GBM. Hence decision tree is consistent with ensemble learning methods.
+
+#### Model performance table
+
+Algorithm           | Hyperparameter Tuned   | Model Performance (Accuracy) | Time
+--------------------|------------------------|------------------------------|-----------
+ANN2                | 1: units = 50,         | 0.7365                       | 1.30 min
+                   || activation = "sigmoid" |                              |
+                   || 2: units = 35,         |                              |
+                   || activation = "tanh"    |                              |
+                   || batch_size = 50,       |                              |
+                   || epochs = 75            |                              |
+Non-linear SVM      | C = 1,                 | 0.7356                       | 1.46 min
+                   || sigma = 0.069          |                              |
+                   || epochs = 75            |                              |
+GBM                 | n.trees = 150,         | 0.7340                       | 19.48 sec
+                   || interaction.depth = 3  |                              |
+ANN1                | 1: units = 50,         | 0.7337                       | 1.17 min
+                   || activation = "relu"    |                              |
+                   || batch_size = 50,       |                              |
+                   || epochs = 75            |                              |
+ANN0                | batch_size = 60,       | 0.7322                       | 53.38 sec
+Logistic Regression | -                      | 0.7317                       | 1.56 sec
+Random Forest       | mtry = 2               | 0.7312                       | 4.32 min
+Decision Tree       | minsplit = 40,         | 0.7297                       | 3.98 sec
+                   || minbucket = 10,        |                              |
+                   || maxdepth = 30          |                              |
+Linear SVM          | C = 0.25               | 0.7274                       | 20.32 min
+KNN                 | k = 10                 | 0.7097                       | 2.14 min
+Naive Bayes         | fL = 1,                | 0.6870                       | 7.48 min
+                   || usekernel = FALSE,     |                              |
+                   || adjust = 1             |                              |
+                    
+## Section 4: Prediction and interpretation
+
+#### Reading the testing data from csv file
+
+```{r}
+disease_test <- read_csv("Disease Prediction Testing(2).csv", col_types = cols())
+```
+
+#### Preprocessing testing data
+
+##### Valid column names
+
+```{r message = F, warning = F}
+colnames(disease_test) <- make.names(colnames(disease_test))
+```
+
+##### Data outliers
+
+Winsorizing extreme outliers in High Blood Pressure, Low Blood Pressure, Height and Weight similar to training data.
+
+```{r message=F, warning=F}
+winsorize <- function(x){
+   qnt <- quantile(x, probs = c(.25, .75), na.rm = T)
+   caps <- quantile(x, probs = c(.05, .95), na.rm = T)
+   bound <- 1.5 * IQR(x, na.rm = T)
+   if((x == disease_test$Height) | (x == disease_test$Weight)){
+     x[x < (qnt[1] - bound)] <- caps[1]
+   }
+   else{
+     x[x < (qnt[1] - bound)] <- caps[1]
+     x[x > (qnt[2] + bound)] <- caps[2]
+   }
+   return(x)
+}
+
+disease_test$High.Blood.Pressure <- winsorize(disease_test$High.Blood.Pressure)
+disease_test$Low.Blood.Pressure <- winsorize(disease_test$Low.Blood.Pressure)
+disease_test$Height <- winsorize(disease_test$Height)
+disease_test$Weight <- winsorize(disease_test$Weight)
+```
+
+##### Erroneous data 
+
+```{r message=F, warning=F}
+nrow(disease_test[disease_test$High.Blood.Pressure < disease_test$Low.Blood.Pressure,])
+```
+
+Swapping values where High Blood Pressure is lower than Low Blood Pressure.
+
+```{r message=F, warning=F}
+index <- which(disease_test$High.Blood.Pressure < disease_test$Low.Blood.Pressure)
+for(i in index){
+  x <- disease_test[i, "High.Blood.Pressure"]
+  disease_test[i, "High.Blood.Pressure"] <- disease_test[i, "Low.Blood.Pressure"]
+  disease_test[i, "Low.Blood.Pressure"] <- x
+}
+```
+
+##### Numerization and standardization using recipes
+
+```{r message = F, warning = F}
+rec_obj <- recipe(ID ~ ., data = disease_test) %>%
+  step_dummy(all_nominal(), -all_outcomes()) %>%
+  step_center(all_predictors(), -all_outcomes()) %>%
+  step_scale(all_predictors(), -all_outcomes()) %>%
+  prep(data = disease_test)
+```
+
+Applying the above recipe on testing data to convert it to dataset required for ANN.
+
+```{r message = F, warning = F}
+x_test <- bake(rec_obj, new_data = disease_test) %>% select(-ID)
+```
+
+#### Prediction using Logistic Regression
+
+```{r message = F, warning = F}
+lr_pred <- predict(lr_model, newdata = disease_test)
+```
+
+#### Prediction using ANN
+
+```{r message = F, warning = F}
+ann0_pred <- predict_classes(object = keras_model0, x = as.matrix(x_test)) %>%
+  as.vector()
+
+ann1_pred <- predict_classes(object = keras_model1, x = as.matrix(x_test)) %>%
+  as.vector()
+
+ann2_pred <- predict_classes(object = keras_model2, x = as.matrix(x_test)) %>%
+  as.vector()
+```
+
+#### Prediction using Decision Tree
+
+```{r message = F, warning = F}
+dt_pred <- predict(dt_model, newdata = disease_test)
+```
+
+#### Combining the predictions made by all five models
+
+```{r}
+prediction <- data.frame(ID = disease_test$ID)
+prediction$DT <- dt_pred
+prediction$LR <- lr_pred
+prediction$ANN0 <- ann0_pred
+prediction$ANN1 <- ann1_pred
+prediction$ANN2 <- ann2_pred
+```
+
+#### Writing prediction results to csv file
+
+```{r}
+write.csv(prediction, "prediction.csv")
+```

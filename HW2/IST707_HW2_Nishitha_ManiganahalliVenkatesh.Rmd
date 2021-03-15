@@ -1,0 +1,401 @@
+---
+output: html_document
+---
+
+# Cluster Analysis and Decision Tree Induction
+
+#### Reading the training data from csv file
+```{r data, message=F, warning=F}
+library(tidyverse)
+wfor_train <- read_csv("Weather Forecast Training.csv", col_types = cols())
+attr(wfor_train, 'spec') <- NULL
+```
+
+#### Size of the training dataset
+```{r}
+dim(wfor_train)
+```
+
+#### Internal sturcture of the weather forecast training dataset
+```{r}
+str(wfor_train)
+```
+
+## Section 1: Data preparation
+
+#### Data quality issues
+
+##### Missing values
+```{r}
+sum(!complete.cases(wfor_train))
+```
+
+The data can be grouped based on location and missing values can be replaced with mean of their respective attributes for that location. This makes sure that the data is precise with respect to location.
+
+```{r message=F, warning=F}
+library(dplyr)
+impute.mean <- function(x) replace(x, is.na(x), round(mean(x, na.rm = TRUE),1))
+wfor_train <- wfor_train %>%
+  group_by(Location) %>%
+  mutate(
+    MinTemp = impute.mean(MinTemp),
+    MaxTemp = impute.mean(MaxTemp),
+    Rainfall = impute.mean(Rainfall),
+    Evaporation = impute.mean(Evaporation),
+    Sunshine = impute.mean(Sunshine),
+    WindGustSpeed = round(impute.mean(WindGustSpeed)),
+    WindSpeed = round(impute.mean(WindSpeed)),
+    Humidity = round(impute.mean(Humidity)),
+    Pressure = round(impute.mean(Pressure)),
+    Cloud = round(impute.mean(Cloud)),
+    Temp = impute.mean(Temp)
+  )
+```
+
+In some cases the missing values are replaced by NaN as there are no values for the attribute for that particular location. Such values can be replaced with the mean of the attribute by considering the entire dataset, avoiding lose of interesting data.
+
+```{r}
+wfor_train$Evaporation <- impute.mean(wfor_train$Evaporation)
+wfor_train$Sunshine <- impute.mean(wfor_train$Sunshine)
+wfor_train$WindGustSpeed <- impute.mean(wfor_train$WindGustSpeed)
+wfor_train$Pressure <- round(impute.mean(wfor_train$Pressure))
+wfor_train$Cloud <- round(impute.mean(wfor_train$Cloud))
+```
+
+In case of categorical variables like wind direction missing values are replaced with mode of the attribute based on location.
+
+```{r}
+impute.mode <- function(x) {
+   uni <- unique(x)
+   mod <- uni[which.max(tabulate(match(x, uni, incomparables = NA)))]
+   replace(x, is.na(x), mod)
+}
+wfor_train <- wfor_train %>%
+  group_by(Location) %>%
+  mutate(
+    WindGustDir = impute.mode(WindGustDir),
+    WindDir = impute.mode(WindDir),
+    RainToday = impute.mode(RainToday)
+    )
+```
+
+Categorical variables that still contain missing values are replaced with the mode for the entire dataset.
+
+```{r}
+wfor_train$WindGustDir <- impute.mode(wfor_train$WindGustDir)
+```
+
+```{r}
+sum(!complete.cases(wfor_train))
+```
+
+##### Duplicate data
+
+```{r}
+nrow(wfor_train[duplicated(wfor_train), ])
+```
+
+Removing the 21 duplicate records from the dataset.
+
+```{r}
+wfor_train <- wfor_train %>%
+  distinct(.keep_all = TRUE)
+
+nrow(wfor_train[duplicated(wfor_train), ])
+```
+
+##### Transforming categorical attributes to numerical attributes
+```{r message=F, warning=F}
+library(onehot)
+encoder <- onehot(wfor_train, stringsAsFactors = TRUE, max_levels = 20)
+training <- data.frame(predict(encoder, wfor_train))
+```
+
+#### Exploratory Data Analysis
+
+How does humidity vary with temperature?
+
+```{r message=F, warning=F}
+library(ggplot2)
+ggplot(wfor_train, aes(x = Humidity, y = Temp, group = Location, color = Location)) +
+geom_line()
+```
+
+As temperature increases, humidity is likely to decrease
+
+What is the proportion of RainToday?
+
+```{r}
+ggplot(wfor_train) +
+  geom_bar(aes(x = RainToday))
+```
+
+The proportion of data for rain today id greater
+
+## Section 2: Build, tune and evaluate cluster analysis and decision tree models
+
+#### K-means clustering
+
+Running k-means clustering algorithm on the entire dataset with 2 centroids.
+
+```{r message=F, warning=F}
+library(factoextra)
+t1 <- scale(training, center = TRUE, scale = TRUE)
+
+km_output <- kmeans(t1, centers = 2, nstart = 25, iter.max = 10, algorithm = "Hartigan-Wong")
+str(km_output)
+
+fviz_cluster(km_output, data = t1)
+```
+  
+##### Elbow method to optimize number of clusters
+
+1. Entire dataset
+
+```{r message=F, warning=F}
+set.seed(10)
+wss <- function(k){
+  return(kmeans(t1, k, nstart = 25)$tot.withinss)
+}
+
+k_values <- 1:8
+
+wss_values <- purrr::map_dbl(k_values, wss)
+
+plot(x = k_values, y = wss_values, 
+     type = "b", frame = F,
+     xlab = "Number of clusters K",
+     ylab = "Total within-clusters sum of square")
+```
+  
+The optimal number of clusters is 2 for the entire dataset.
+
+2. Excluding dummies
+
+```{r message=F, warning=F}
+t2 <- t1[ , -c(6:21, 23:38, 44:47)]
+set.seed(10)
+wss <- function(k){
+  return(kmeans(t2, k, nstart = 25)$tot.withinss)
+}
+
+k_values <- 1:8
+
+wss_values <- purrr::map_dbl(k_values, wss)
+
+plot(x = k_values, y = wss_values, 
+     type = "b", frame = F,
+     xlab = "Number of clusters K",
+     ylab = "Total within-clusters sum of square")
+```
+  
+The optimal number of clusters is 2 for the dataset without the dummies.
+
+#### Hierarchical Agglomerative Clustering
+
+Running HAC clustering algorithm on 50% of the entire dataset.
+
+```{r}
+train_sample <- training[sample(nrow(training), 0.7*dim(training)[1]), ] 
+t3 <- scale(train_sample, center = TRUE, scale = TRUE)
+
+hac_output <- hclust(dist(t3, method = "euclidean"), method = "complete")
+plot(hac_output)
+```
+
+Due to large amount of data and time complexity of HAC the clustering algorithm is run on a random sample of 70% of the total data. The cut can be made at a height between 30 and 40, which results in 2 clusters.
+
+```{r}
+hac_cut <- cutree(hac_output, 2)
+```
+
+##### Best performing models
+
+Model      | Hyper-parameters
+-----------|-----------------
+k-means    | centers = 2, iter.max = 10
+HAC        | distance = euclidean, method = complete
+
+- Performance of k-means algorithm can be determined by sum of squared errors. If SSE is low, the data points within the cluster are identical
+
+- Performance of HAC can be measured using silhouette coefficient
+
+##### Repurposing unsupervised learning algorithms for classification
+- Clustering algorithms can be repurposed for classification based on the target variable in the training dataset. Depending on differnt values of target variables it can be decided which cluster represents what value of the target variable by measuring entropy or confusion matrix
+
+- Another way could be randomly asign the target variable values to the clusters and calculate number of true positives and true negatives classified by each cluster. If true positive is greater, then the target variable value assigned to the cluster is correct
+
+- The clusters can be used for classification by determining the distance of the test data points from the clusters and assigning them to the cluster with smallest distance
+
+#### Decision tree induction
+```{r message=F, warning=F}
+library(caret)
+library(rpart)
+dt_model <- train(RainTomorrow ~ ., data = wfor_train, metric = "Accuracy", method = "rpart")
+print(dt_model)
+print(dt_model$finalModel)
+```
+
+##### ROC curve and AUC
+```{r message=F, warning=F}
+library(pROC)
+dt_model <- train(RainTomorrow ~ ., data = wfor_train, method = "rpart", tuneLength = 10)
+dt_pred_prob <- predict(dt_model, newdata = wfor_train, type = "prob")
+roc_curve <- roc(wfor_train$RainTomorrow, dt_pred_prob$Yes)
+plot(roc_curve)
+```
+
+Area under the curve
+
+```{r}
+auc(roc_curve)
+```
+
+## Section 3: Prediction and interpretation
+
+#### Reading the testing data from csv file
+
+```{r}
+wfor_test <- read_csv("Weather Forecast Testing.csv", col_types = cols())
+```
+
+##### Imputing missing values
+
+```{r}
+sum(!complete.cases(wfor_test))
+```
+
+Replacing missing values based on location
+
+```{r}
+wfor_test <- wfor_test %>%
+  group_by(Location) %>%
+  mutate(
+    MinTemp = impute.mean(MinTemp),
+    MaxTemp = impute.mean(MaxTemp),
+    Rainfall = impute.mean(Rainfall),
+    Evaporation = impute.mean(Evaporation),
+    Sunshine = impute.mean(Sunshine),
+    WindGustSpeed = round(impute.mean(WindGustSpeed)),
+    WindSpeed = round(impute.mean(WindSpeed)),
+    Humidity = round(impute.mean(Humidity)),
+    Pressure = round(impute.mean(Pressure)),
+    Cloud = round(impute.mean(Cloud)),
+    Temp = impute.mean(Temp),
+    WindGustDir = impute.mode(WindGustDir),
+    WindDir = impute.mode(WindDir),
+    RainToday = impute.mode(RainToday)
+  )
+```
+
+Replacing remaining with respect to the entire dataset
+
+```{r}
+wfor_test$Evaporation <- impute.mean(wfor_test$Evaporation)
+wfor_test$Sunshine <- impute.mean(wfor_test$Sunshine)
+wfor_test$WindGustSpeed <- impute.mean(wfor_test$WindGustSpeed)
+wfor_test$Pressure <- round(impute.mean(wfor_test$Pressure))
+wfor_test$Cloud <- round(impute.mean(wfor_test$Cloud))
+wfor_test$WindGustDir <- impute.mode(wfor_test$WindGustDir)
+```
+
+#### Prediction using decision tree
+```{r}
+dt_predict <- predict(dt_model, newdata = wfor_test, na.action = na.omit, type = "raw")
+head(dt_predict, 5)
+```
+
+RainTomorrow is predicted as either "Yes" or "No"
+
+#### Prediction using k-means
+
+Determining the two clusters of k-means
+```{r}
+c1 <- wfor_train[(km_output$cluster==1), ]
+c1 %>%
+  group_by(RainTomorrow) %>%
+  count()
+```
+
+In case of cluster 1, true positives is greater than true negatives. We can conclude that cluster 1 represents RainTomorrow as Yes
+
+```{r}
+c2 <- wfor_train[(km_output$cluster==2), ]
+c2 %>%
+  group_by(RainTomorrow) %>%
+  count()
+```
+
+In case of cluster 2, true negatives is greater than true positives. We can conclude that cluster 2 represents RainTomorrow as No
+
+- Calculating average of Rainfall, Humidity and Temp for cluster 1 (RainTomorrow = Yes) and comparting the testing data with these values
+
+- If Rainfall and Humidity is greater or Temp is less than the respective averages, then we can say that the data point belongs to cluster 1 i.e., RainTomorrow = Yes
+
+```{r}
+c1_avg_rainfall <- mean(c1$Rainfall)
+c1_avg_humidity <- mean(c1$Humidity)
+c1_avg_temp  <- mean(c1$Temp)
+```
+
+Finding those data points in test data that belong to cluster 1 (RainTomorrow = Yes)
+
+```{r}
+km_pred <- wfor_test[(((wfor_test$Rainfall > c1_avg_rainfall) & (wfor_test$Humidity > c1_avg_humidity)) | (wfor_test$Temp < c1_avg_temp)), ]
+
+```
+
+#### Prediction using HAC
+
+Determining the two clusters of HAC
+
+```{r}
+hc1 <- train_sample[(hac_cut == 1), ]
+hc1 %>% 
+  group_by(RainTomorrow.Yes) %>%
+  count()
+```
+
+In cluster 1, true negatives are greater than true positives. We can say that cluster 1 represents RainTomorrow = No
+
+```{r}
+hc2 <- train_sample[(hac_cut == 2), ]
+hc2 %>%
+  group_by(RainTomorrow.Yes) %>%
+  count()
+```
+
+In case of cluster 2, true positives are greater than true negatives. We can say that cluster two represents RainTomorrow = Yes
+
+- Calculating average of Rainfall, Humidity and Temp for cluster 1 (RainTomorrow = No) and comparting the testing data with these values
+
+- If Rainfall and Humidity is less or Temp is greater than the respective averages, then we can say that the data point belongs to cluster 1 i.e., RainTomorrow = No
+
+```{r}
+hc1_avg_rainfall <- mean(hc1$Rainfall)
+hc1_avg_humidity <- mean(hc1$Humidity)
+hc1_avg_temp  <- mean(hc1$Temp)
+```
+
+Finding the data points in test data that belong to cluster 1 (RainTomorrow = No)
+
+```{r}
+hac_pred <- wfor_test[(((wfor_test$Rainfall < hc1_avg_rainfall) & (wfor_test$Humidity < hc1_avg_humidity)) | (wfor_test$Temp > hc1_avg_temp)), ]
+```
+
+#### Combining the prediction made by all the three models
+```{r}
+prediction <- data.frame(ID = wfor_test$ID)
+prediction$kmeans <- NA
+prediction$kmeans[km_pred$ID] <- "Yes"
+prediction$kmeans[is.na(prediction$kmeans)] <- "No"
+prediction$HAC <- NA
+prediction$HAC[hac_pred$ID] <- "No"
+prediction$HAC[is.na(prediction$HAC)] <- "Yes"
+prediction$DT <- dt_predict
+```
+
+#### Writing prediction results to csv file
+```{r}
+write.csv(prediction, "prediction.csv")
+```
